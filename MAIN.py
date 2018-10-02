@@ -200,7 +200,7 @@ class Example(QMainWindow):
 
     def initUI(self):
         windowWidth = 1800
-        windowHeight = 1400
+        windowHeight = 900
         screenCenter = QDesktopWidget().availableGeometry().center()
         self.setGeometry(screenCenter.x() - (windowWidth/2), screenCenter.y() - (windowHeight/2), windowWidth, windowHeight)
         self.setWindowTitle('Hippocampus ONE')
