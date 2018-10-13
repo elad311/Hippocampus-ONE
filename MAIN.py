@@ -5,7 +5,9 @@ from PyQt5.QtWidgets import QDesktopWidget
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 import sys, random, math, os, sqlite3
-import sizegrip as sg
+from nodes import *
+from painter import *
+from dialogs import *
 
 class Example(QMainWindow):
     toolbaropen = 0
@@ -28,7 +30,33 @@ class Example(QMainWindow):
         self.nodeUnderEdit = []
         self.mode('none')
 
+        #Painter-Related
+        self.Brush = False #painting on/off
+        self.DrawingShapes = Shapes()
+        self.shapeStorage = []
+        self.IsPainting = False
+        self.IsEraseing = False
+
+        self.CurrentColour = Colour3(0,0,0)
+        self.CurrentWidth = 10
+        self.ShapeNum = 0
+        self.IsMouseing = False
+
+        self.MouseLoc = Point(0, 0)
+        self.LastPos = Point(0, 0)
+
+        self.IsPainting = False
+        self.ShapeNum = 0
+
+        #Selection-Tool
+        self.selection = []
+
+        self.refresh_completion_list()
+        self.new_dialog = new_canvas_dialog(self)
+        self.link_dialog = link_node_dialog(self)
+
     def initFormatbar(self, x, y, node):
+        self.temporaryNode = node
 
         self.fontSize = QSpinBox(self)
         # Will display " pt" after each value
@@ -43,13 +71,23 @@ class Example(QMainWindow):
         self.boldAction.triggered.connect(node.bold)
         self.boldAction.triggered.connect(lambda: self.returnFocusToTextAfterToolbarClick(node))
 
+        self.alignLeftAction = QAction(QIcon("align-left.png"), "AlignLeft", self)
+        self.alignLeftAction.triggered.connect(node.alignLeft)
+        self.alignLeftAction.triggered.connect(lambda: self.returnFocusToTextAfterToolbarClick(node))
+
+        self.alignCenterAction = QAction(QIcon("align-center.png"), "AlignCenter", self)
+        self.alignCenterAction.triggered.connect(node.alignCenter)
+        self.alignCenterAction.triggered.connect(lambda: self.returnFocusToTextAfterToolbarClick(node))
+
         #self.boldAction2 = QPushButton()                #------ how to get icon into a button
         #self.boldAction2.setIcon(QIcon(QPixmap("bold.png")))
         #self.boldAction2.setIconSize(QPixmap("bold.png").rect().size())
         #self.boldAction2.clicked.connect(node.bold)
 
-        self.enlargeButton = QPushButton("enlarge")
-        self.enlargeButton.clicked.connect(lambda: node.resize(node.width() +30, node.height()))
+        self.enlargeButton = QPushButton("Link")
+        self.enlargeButton.clicked.connect(lambda: self.link_dialog.show())
+        if node.link is not None:
+            self.enlargeButton.setText(str(node.link))
 
         print(node)
         # self.italicAction = QAction(QIcon("icons/italic.png"), "Italic", self)
@@ -96,6 +134,8 @@ class Example(QMainWindow):
         self.formatbar.addWidget(self.fontSize)
         #self.formatbar.addAction(fontColor)
         self.formatbar.addAction(self.boldAction)
+        self.formatbar.addAction(self.alignLeftAction)
+        self.formatbar.addAction(self.alignCenterAction)
         self.formatbar.addWidget(self.enlargeButton)
 
         self.formatbar.show()
@@ -135,7 +175,6 @@ class Example(QMainWindow):
 
         self.statusbar = self.statusBar()
 
-
     def fakeFormatbar(self):
         self.fontBox = QFontComboBox(self)
         # fontBox.currentFontChanged.connect(lambda font: self.setCurrentFont(font))
@@ -164,12 +203,26 @@ class Example(QMainWindow):
         self.makeArrows.clicked.connect(lambda: self.mode('Arrows'))
         self.makeArrows.clicked.connect(lambda: self.setButtonDown_releaseOthers(self.makeArrows))
 
+        self.makeSelection = QPushButton("Select  ()")
+        self.makeSelection.clicked.connect(lambda: self.mode('Select'))
+        self.makeSelection.clicked.connect(lambda: self.setButtonDown_releaseOthers(self.makeSelection))
+
 
         #---------------  spacer
         self.mainbar_spacer = QWidget()
         self.mainbar_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.separateNode = QPushButton("Separate")
+        self.separateNode.clicked.connect(lambda: self.mode('Regular'))
+        self.separateNode.clicked.connect(lambda: self.setButtonDown_releaseOthers(self.separateNode))
+
+        #---------------  spacer
+        self.mainbar_spacer2 = QWidget()
+        self.mainbar_spacer2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         #---------------------  Save & Load
 
+        self.newCanvas = QPushButton("New")
+        self.newCanvas.clicked.connect(lambda: self.new_dialog.show())
         self.saveCanvas = QPushButton("Save")
         self.saveCanvas.clicked.connect(self.save_canvas)
         self.loadCanvas = QPushButton("Load")
@@ -181,22 +234,32 @@ class Example(QMainWindow):
         self.mainbar.addSeparator()
         self.mainbar.addWidget(self.makeArrows)
         self.mainbar.addSeparator()
+        self.mainbar.addWidget(self.makeSelection)
+        self.mainbar.addSeparator()
         #spacer
         self.mainbar.addWidget(self.mainbar_spacer)
         #spacer
+
+        self.mainbar.addWidget(self.separateNode)
+
+        #spacer
+        self.mainbar.addWidget(self.mainbar_spacer2)
+        #spacer
+        self.mainbar.addWidget(self.newCanvas)
+        self.mainbar.addSeparator()
         self.mainbar.addWidget(self.saveCanvas)
         self.mainbar.addSeparator()
         self.mainbar.addWidget(self.loadCanvas)
         self.mainbar.show()
+        #----------------------------------------------------------------------------------
+        self.painterase = QPushButton("Paint/Erase")
+        self.painterase.clicked.connect(lambda: self.mode('Paint'))
+        self.painterase.clicked.connect(lambda: self.setButtonDown_releaseOthers(self.painterase))
 
-    def setButtonDown_releaseOthers(self, button):
-        if button is False:
-            self.pressedDownButton[0].setDown(False)
-        else:
-            self.pressedDownButton[0].setDown(False)
-            self.pressedDownButton.clear()
-            button.setDown(True)
-            self.pressedDownButton.append(button)
+        self.paintbar = QToolBar(self)
+        self.addToolBar(Qt.LeftToolBarArea, self.paintbar)
+        self.paintbar.addWidget(self.painterase)
+        self.paintbar.show()
 
     def initUI(self):
         windowWidth = 1800
@@ -222,8 +285,10 @@ class Example(QMainWindow):
         self.show()
         self.node_to_draw_points = None
 
-    def mousePressEvent(self, event): #allows deletion if dragging away using MIDDLE BUTTON
-        if event.buttons() == Qt.MidButton and self.mode_handler in ['Regular', 'Special']:
+    #OVERRIDING FUNCTIONS
+    def mousePressEvent(self, event): #allows deletion if dragging away using RIGHT BUTTON
+        print('pres')
+        if event.buttons() == Qt.RightButton and self.mode_handler in ['Regular']:
             for node in self.nodes:
                 x1, x2, y1, y2 = self.coords(node)
                 if x1 - 10 < event.pos().x() < x2 + 10 and y1 - 10 < event.pos().y() < y2 + 10 and node.hasFocus() and self.node_to_change is None:
@@ -233,15 +298,30 @@ class Example(QMainWindow):
                     self.nodes.remove(node)
                     node.setParent(None)
                     node.close()
+                    node.deleteLater()
                     del node
-                    self.statusbar.showMessage('')
+                    self.statusbar.showMessage('deleted node')
                     return
-        if event.buttons() == Qt.RightButton and self.mode_handler in ['Regular', 'Special', 'Arrows']: #add modes FROM MAINBAR here to cancel on right click
+        if event.buttons() == Qt.RightButton and self.mode_handler in ['Regular', 'Arrows', 'Paint']: #add modes FROM MAINBAR here to cancel on right click
             self.mode('none')
             self.setButtonDown_releaseOthers(False)
+        elif event.buttons() == Qt.RightButton:
+            self.mode('none')
+            print('deselected all')
+            self.setButtonDown_releaseOthers(False) #Release the select button bug!
+            for node in self.selection:
+                node.got_deselected()
+                node.selected = False
+            self.selection.clear()
+
+        #---------------PAINTER---------------
+        if self.mode_handler in ['Paint']:
+            self.IsPainting = True
+            self.ShapeNum += 1
+            self.LastPos = Point(0, 0)
 
     def mouseMoveEvent(self, event):
-        if self.mode_handler in ['Regular', 'Special', 'none']:
+        if self.mode_handler in ['Regular', 'Select', 'none']:
             if self.node_to_move is None:
                 for node in self.nodes:
                     x1, x2, y1, y2 = self.coords(node)
@@ -256,19 +336,29 @@ class Example(QMainWindow):
                 x1, x2, y1, y2 = self.coords(self.node_to_move[0])
                 width = x2 - x1
                 height = y2 - y1
-                if y1 + event.pos().y() - self.node_to_move[2] > self.UPPER_LIMIT:
-                    self.node_to_move[0].setGeometry(x1 + event.pos().x() - self.node_to_move[1],
-                                                     y1 + event.pos().y() - self.node_to_move[2], width, height)
-                else:
-                    self.node_to_move[0].setGeometry(x1 + event.pos().x() - self.node_to_move[1], self.UPPER_LIMIT, width, height)
+                if self.node_to_move[0].selected == False:
+                    if y1 + event.pos().y() - self.node_to_move[2] > self.UPPER_LIMIT:
+                        self.node_to_move[0].setGeometry(x1 + event.pos().x() - self.node_to_move[1],
+                                                         y1 + event.pos().y() - self.node_to_move[2], width, height)
+                    else:
+                        self.node_to_move[0].setGeometry(x1 + event.pos().x() - self.node_to_move[1], self.UPPER_LIMIT, width, height)
+                else:        #-------------------MOVE SELECTED NODES!-------------------
+                    for node in self.selection:
+                        node.move(node.pos().x() + (event.x() - x1), node.pos().y() + (event.y() - y1))
                 self.node_to_move = (self.node_to_move[0], event.pos().x(), event.pos().y())
                 return
-            elif event.buttons() == Qt.LeftButton:
+            elif event.buttons() == Qt.LeftButton and self.mode_handler not in 'none':
                 if self.node_to_change is None:
-                    self.node_to_change = (
-                        Node(self), event.pos().x(), event.pos().y())
-                    self.node_to_change[0].setGeometry(event.pos().x(),
-                                                       event.pos().y(), 0, 0)
+                    if self.mode_handler in ['Regular']:
+                        self.node_to_change = (
+                            text_node(self), event.pos().x(), event.pos().y())
+                        self.node_to_change[0].setGeometry(event.pos().x(),
+                                                           event.pos().y(), 0, 0)
+                    elif self.mode_handler in ['Select']:
+                        self.node_to_change = (
+                            select_node(self), event.pos().x(), event.pos().y())
+                        self.node_to_change[0].setGeometry(event.pos().x(),
+                                                           event.pos().y(), 0, 0)
                     self.node_to_change[0].show()
                 elif self.node_to_change is not None and self.node_to_move is None:
                     self.node_to_change[0].handle.move(self.node_to_change[0].width() - 20,
@@ -287,25 +377,53 @@ class Example(QMainWindow):
                     else:
                         self.node_to_change[0].setGeometry(x1, self.UPPER_LIMIT, math.fabs(event.pos().x() - self.node_to_change[1]),
                                                            self.node_to_change[0].height())
-
             self.setCursor(Qt.ArrowCursor)
+        #-----------------PAINTER--------------------------
+        if (self.IsPainting == True):
+            self.MouseLoc = Point(event.x(), event.y())
+            if ((self.LastPos.X != self.MouseLoc.X) and (self.LastPos.Y != self.MouseLoc.Y)):
+                self.LastPos = Point(event.x(), event.y())
+                self.DrawingShapes.NewShape(self.LastPos, self.CurrentWidth,
+                                                       self.CurrentColour, self.ShapeNum)
+            self.repaint()
 
     def mouseReleaseEvent(self, event):     #contains loops for printing NODES info
         if self.node_to_change is not None:
-            self.nodes.append(self.node_to_change[0])
-            self.node_to_change[0].index = self.node_count
-            self.node_to_change[0].handle.move(self.node_to_change[0].width() -20, self.node_to_change[0].height() -20)
-            for node in self.nodes:
-                print(node)
-                for nod in node.connected_to:
-                    print(nod)
-            self.node_to_change = None
-            self.node_count += 1
+            if self.mode_handler in ['Select']:
+                for node in self.nodes:
+                    if node.parent == self.node_to_change[0].parent:
+                        if node.selected == False:
+                            if node.pos().x() > self.node_to_change[0].pos().x() and node.width() + node.pos().x() < self.node_to_change[0].width() + self.node_to_change[0].pos().x():
+                                if node.pos().y() > self.node_to_change[0].pos().y() and node.height() + node.pos().y() < self.node_to_change[0].height() + self.node_to_change[0].pos().y():
+                                    self.selection.append(node)
+                                    node.selected = True
+                                    node.got_selected()
+                self.node_to_change[0].deleteLater()
+                self.node_to_change = None
+                print(self.selection)
+            else:
+                self.nodes.append(self.node_to_change[0])
+                self.node_to_change[0].index = self.node_count
+                self.node_to_change[0].handle.move(self.node_to_change[0].width() -20, self.node_to_change[0].height() -20)
+                if self.mode_handler in ['Regular']:
+                    for node in self.nodes:
+                        print(node)
+                        for nod in node.connected_to:
+                            print(nod)
+                self.node_to_change = None
+                self.node_count += 1
 
         if self.node_to_move is not None:
             self.node_to_move = None
+        #-----------------PAINTER--------------------------
+        if (self.IsPainting == True):
+            self.IsPainting = False
+            print(self.DrawingShapes.GetShape(5))
+            #self.shapeStorage.append(self.DrawingShapes.__Shapes)
+            #self.DrawingShapes.__Shapes.clear()
+        if (self.IsEraseing == True):
+            self.IsEraseing = False
 
-    # ---------------------------------------------------------------------------------------------- new
     def paintEvent(self, event):  #allows drawing lines
         # if self.at_least_one_connection:  # if connections exist, draw them
         qp = QPainter(self)
@@ -316,7 +434,13 @@ class Example(QMainWindow):
                 qp.drawLine(node.x() + node.width() / 2, node.y() + node.height() / 2, to.x() + to.width() / 2,
                             to.y() + to.height() / 2)
         self.update()
+        #-----------------PAINTER--------------------------
+        painter = QPainter()
+        painter.begin(self)
+        self.drawLines(event, painter)
+        painter.end()
 
+    #OTHER FUNCTIONS
     def coords(self, node):
         return node.x(), node.x() + node.width(), node.y(), node.y() + node.height()
 
@@ -327,17 +451,26 @@ class Example(QMainWindow):
         self.node_to_connect = None
         self.statusbar.showMessage(str(new_mode))
 
-    def bold(self, node):    #UNUSED
-        if node.hasFocus():
-            if node.fontWeight() == QFont.Bold:
-                node.setFontWeight(QFont.Normal)
-            else:
-                node.setFontWeight(QFont.Bold)
+    def setButtonDown_releaseOthers(self, button):
+        if button is False:
+            self.pressedDownButton[0].setDown(False)
+        else:
+            self.pressedDownButton[0].setDown(False)
+            self.pressedDownButton.clear()
+            button.setDown(True)
+            self.pressedDownButton.append(button)
 
     def returnFocusToTextAfterToolbarClick(self, node):
-        print('oy')
         self.removeToolBar(self.formatbar)
         self.initFormatbar(self.x() + node.x(), self.y() + node.y() - 5, node)
+
+    def new_canvas(self, dialog): #creates new file
+        print('clicked OK')
+        if os.path.exists(dialog + '.db'):
+            os.remove(dialog + '.db')
+        conn = sqlite3.connect(dialog + '.db')
+        conn.commit()
+        conn.close()
 
     def save_canvas(self):
         if os.path.exists('canvas_new.db'):
@@ -362,7 +495,7 @@ class Example(QMainWindow):
         conn = sqlite3.connect('canvas_new.db')
         c = conn.cursor()
         for row in c.execute('SELECT * FROM nodes'):
-            a = Node(self)
+            a = text_node(self)
             a.setGeometry(row[0], row[2], row[1] - row[0], row[3] - row[2]) #NOTICE DIFFERENT ORDER of variables!
             a.index = self.node_count
             self.node_count += 1
@@ -385,10 +518,8 @@ class Example(QMainWindow):
         print('loaded successfully')
 
     def clear_canvas(self):
-        counter = 0
         for node in self.nodes:
             node.setParent(None)
-            counter += 1
             node.deleteLater()
         print(str(self.nodes))
         self.nodes.clear()  #-------------------------CHECK for GARBAGE COLLECTION!
@@ -397,294 +528,28 @@ class Example(QMainWindow):
         self.statusbar.showMessage('cleared everything')
         print('cleared everything')
 
-class Node(QTextEdit):
-    def __init__(self, parent=None):
-        QTextEdit.__init__(self, parent)
-        #self.setFontFamily(ex.fontBox.currentFont().family())
-        self.setFontPointSize(ex.fontSize.value())
-        self.setHtml("""<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd"><html><head><meta name="qrichtext" content="1" /><style type="text/css">p, li { white-space: pre-wrap; }</style></head><body style=" font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;"><p style="-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-family:'""" + ex.fontBox.currentFont().family() + """'; font-size:""" + str(ex.fontSize.value()) + """pt;"><br /></p></body></html>""")
-        #ex.fontBox.currentFontChanged.connect(lambda font: self.setFontFamily(font.family()))
-        #ex.fontBox.currentFontChanged.connect(self.text_change)
-        ex.fontSize.valueChanged.connect(lambda size: self.setFontPointSize(size))
-        ex.fontSize.valueChanged.connect(self.text_change)
-        self.parent = parent
-        # ex.fontColor.triggered.connect(self.font_color_changed)
-        # ex.backColor.triggered.connect(self.highlight)
-        # ex.boldAction.triggered.connect(self.bold)
-        # ex.italicAction.triggered.connect(self.italic)
-        # ex.underlAction.triggered.connect(self.underline)
-        # --------------------------------------------------------------------------------------------------------------
-        # doesn't work well
-        # ex.strikeAction.triggered.connect(self.strike)
-        # ex.superAction.triggered.connect(self.superScript)
-        # ex.subAction.triggered.connect(self.subScript)
-        # --------------------------------------------------------------------------------------------------------------
-        # ex.alignLeft.triggered.connect(self.alignLeft)
-        # ex.alignCenter.triggered.connect(self.alignCenter)
-        # ex.alignRight.triggered.connect(self.alignRight)
-        # ex.alignJustify.triggered.connect(self.alignJustify)
-        # ex.indentAction.triggered.connect(self.indent)
-        # ex.dedentAction.triggered.connect(self.dedent)
-        self.index = None
-        self.connected_to = []  #array for storing connections on EACH NODE
-        self.textChanged.connect(self.text_change)
-        self.selectionChanged.connect(self.cursor_change)
-        self.cursorPositionChanged.connect(self.cursor_change)
-        # currently not in use
-        self.set_html = False
-        #self.setStyleSheet("border: 2px solid red; border-radius: 10px; border-style: outset; padding: 2px")
-        self.setWindowFlags(Qt.SubWindow)  #important for controlling only the node!
-        self.handle = sg.sizegrip(self)
-
-    """
-    def initFormatbar(self, x, y):
-
-        ex.fontBox = QFontComboBox(ex)
-        # fontBox.currentFontChanged.connect(lambda font: self.setCurrentFont(font))
-
-        ex.fontSize = QSpinBox(ex)
-        # Will display " pt" after each value
-        ex.fontSize.setSuffix(" pt")
-        ex.fontSize.setValue(14)
-        # fontSize.valueChanged.connect(lambda size: self.setFontPointSize(size))
-
-        boldAction = QAction(QIcon("icons/bold.png"), "Bold", self)
-
-        self.formatbar = ex.addToolBar('Format')
-        self.formatbar.setMovable(True)
-
-
-        ex.formatbar.addWidget(ex.fontBox)
-        ex.formatbar.addWidget(ex.fontSize)
-        self.formatbar.addAction(ex.boldAction)
-        boldAction.triggered.connect(self.bold)
-
-        ex.formatbar.show()
-        ex.formatbar.setAllowedAreas(Qt.NoToolBarArea)
-        ex.formatbar.setFloatable(True)
-        ex.formatbar.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.X11BypassWindowManagerHint)
-        ex.formatbar.adjustSize()
-        ex.formatbar.move(x, y)
-
-        ex.statusbar = ex.statusBar()
-        """
-
-
-    def contextMenuEvent(self, event):
-        # indentAction = QAction(QIcon("icons/indent.png"), "Indent Area")
-        # dedentAction = QAction(QIcon("icons/dedent.png"), "Dedent Area")
-        menu = self.createStandardContextMenu()
-
-        format_menu = QMenu('Format')
-
-        fontColor = QAction(QIcon("icons/font-color.png"), "Change font color")
-        format_menu.addAction(fontColor)
-        fontColor.triggered.connect(self.font_color_changed)
-
-        backColor = QAction(QIcon("icons/highlight.png"), "Change background color")
-        format_menu.addAction(backColor)
-        backColor.triggered.connect(self.highlight)
-
-        boldAction = QAction(QIcon("icons/bold.png"), "Bold")  #------------------------------
-        format_menu.addAction(boldAction)
-        boldAction.triggered.connect(self.bold)
-
-        italicAction = QAction(QIcon("icons/italic.png"), "Italic")
-        format_menu.addAction(italicAction)
-        italicAction.triggered.connect(self.italic)
-
-        underlAction = QAction(QIcon("icons/underline.png"), "Underline")
-        format_menu.addAction(underlAction)
-        underlAction.triggered.connect(self.underline)
-
-        alignLeft = QAction(QIcon("icons/align-left.png"), "Align left")
-        format_menu.addAction(alignLeft)
-        alignLeft.triggered.connect(self.alignLeft)
-
-        alignCenter = QAction(QIcon("icons/align-center.png"), "Align center")
-        format_menu.addAction(alignCenter)
-        alignCenter.triggered.connect(self.alignCenter)
-
-        alignRight = QAction(QIcon("icons/align-right.png"), "Align right")
-        format_menu.addAction(alignRight)
-        alignRight.triggered.connect(self.alignRight)
-
-        alignJustify = QAction(QIcon("icons/align-justify.png"), "Align justify")
-        format_menu.addAction(alignJustify)
-        alignJustify.triggered.connect(self.alignJustify)
-
-        superScript = QAction(QIcon("icons/superScript.png"), "Super Script")
-        format_menu.addAction(superScript)
-        superScript.triggered.connect(self.superScript)
-
-        subScript = QAction(QIcon("icons/subScript.png"), "Sub Script")
-        format_menu.addAction(subScript)
-        superScript.triggered.connect(self.subScript)
-
-        def_actions = menu.actions()
-
-        for action in def_actions:
-            menu.removeAction(action)
-
-        menu.addMenu(format_menu)
-
-        menu.addSeparator()
-
-        for action in def_actions:
-            menu.addAction(action)
-
-        menu.exec_(event.globalPos())
-
-    def dropEvent(self, event):
-        filename = event.mimeData().text()[8::]
-        if filename[-3::] in ['png', 'jpg']:
-            image = QImage(filename)
-            cursor = self.textCursor()
-            cursor.movePosition(QTextCursor.End, QTextCursor.MoveAnchor)
-            cursor.insertImage(image, filename)
-
-        else:
-            cursor = self.textCursor()
-            cursor.insertText(filename)
-
-    def mousePressEvent(self, event):
-        if ex.toolbaropen == 0:
-            ex.initFormatbar(ex.x() + self.x(), ex.y() + self.y() - 5, self) #set coords for toolbar
-            ex.toolbaropen = 1
-            ex.nodeUnderEdit.append(self)
-        ex.statusbar.showMessage('Node ' + str(self.index))
-        if event.buttons() == Qt.LeftButton and self.parent.mode_handler == 'Arrows':
-            if not self.parent.node_to_connect:  # saves node that will be connected
-                self.parent.node_to_connect = self
-            elif self not in ex.node_to_connect.connected_to and ex.node_to_connect not in self.connected_to:  # if such a node already exists, and the node that should be connected to it isn't already connected, connect
-                self.parent.node_to_connect.connected_to.append(self)
-                self.parent.node_to_connect = None
-                self.parent.at_least_one_connection = True  # at least one connection was made, so the painter should paint the connections
-
-            else:
-                self.parent.node_to_connect = None
-        else:
-            QTextEdit.mousePressEvent(self, event)
-
-    # --------------------------------------------------------------------------------
-    def cursor_change(self):
-        self.parent.fontSize.blockSignals(True)
-        self.parent.fontBox.blockSignals(True)
-        self.parent.fontSize.setValue(self.fontPointSize())
-        self.parent.fontBox.setCurrentFont(QFont(self.fontFamily()))
-        self.parent.fontSize.blockSignals(False)
-        self.parent.fontBox.blockSignals(False)
-
-    def text_change(self):
-        if len(self.toPlainText()) == 0:
-            self.textChanged.disconnect(self.text_change)
-            self.setFontFamily(self.parent.fontBox.currentFont().family())
-            self.setFontPointSize(self.parent.fontSize.value())
-            self.setHtml("""<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd"><html><head><meta name="qrichtext" content="1" /><style type="text/css">p, li { white-space: pre-wrap; }</style></head><body style=" font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;"><p style="-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-family:'""" + self.parent.fontBox.currentFont().family() + """'; font-size:""" + str(self.parent.fontSize.value()) + """pt;"><br /></p></body></html>""")
-            #self.set_html = True
-            self.textChanged.connect(self.text_change)
-
-    def font_color_changed(self):
-        if self.hasFocus():
-            # Get a color from the text dialog
-            color = QColorDialog.getColor()
-            # Set it as the new text color
-            if color.isValid():
-                self.setTextColor(color)
-
-    def highlight(self):
-        if self.hasFocus():
-            color = QColorDialog.getColor()
-
-            self.setTextBackgroundColor(color)
-
-    def bold(self):   #need to bring back focus to NODE AFTER PRESSING THE TOOLBAR
-        #if self.hasFocus():
-        print('made bold')
-        if self.fontWeight() == QFont.Bold:
-            self.setFontWeight(QFont.Normal)
-        else:
-            self.setFontWeight(QFont.Bold)
-
-
-    def italic(self):
-        if self.hasFocus():
-            state = self.fontItalic()
-
-            self.setFontItalic(not state)
-
-    def underline(self):
-        if self.hasFocus():
-            state = self.fontUnderline()
-
-            self.setFontUnderline(not state)
-
-    def strike(self):
-        if self.hasFocus():
-            # Grab the text's format
-            fmt = self.currentCharFormat()
-
-            # Set the fontStrikeOut property to its opposite
-            fmt.setFontStrikeOut(not fmt.fontStrikeOut())
-
-            # And set the next char format
-            self.setCurrentCharFormat(fmt)
-
-    def superScript(self):
-        if self.hasFocus():
-            # Grab the current format
-            fmt = self.currentCharFormat()
-
-            # And get the vertical alignment property
-            align = fmt.verticalAlignment()
-
-            # Toggle the state
-            if align == QTextCharFormat.AlignNormal:
-
-                fmt.setVerticalAlignment(QTextCharFormat.AlignSuperScript)
-
-            else:
-
-                fmt.setVerticalAlignment(QTextCharFormat.AlignNormal)
-
-            # Set the new format
-            self.setCurrentCharFormat(fmt)
-
-    def subScript(self):
-        if self.hasFocus():
-            # Grab the current format
-            fmt = self.currentCharFormat()
-
-            # And get the vertical alignment property
-            align = fmt.verticalAlignment()
-
-            # Toggle the state
-            if align == QTextCharFormat.AlignNormal:
-
-                fmt.setVerticalAlignment(QTextCharFormat.AlignSubScript)
-
-            else:
-
-                fmt.setVerticalAlignment(QTextCharFormat.AlignNormal)
-
-            # Set the new format
-            self.setCurrentCharFormat(fmt)
-
-    def alignLeft(self):
-        if self.hasFocus():
-            self.setAlignment(Qt.AlignLeft)
-
-    def alignRight(self):
-        if self.hasFocus():
-            self.setAlignment(Qt.AlignRight)
-
-    def alignCenter(self):
-        if self.hasFocus():
-            self.setAlignment(Qt.AlignCenter)
-
-    def alignJustify(self):
-        if self.hasFocus():
-            self.setAlignment(Qt.AlignJustify)
+    def refresh_completion_list(self):
+        # finds all .db files and presents them without the suffix as autocompletion
+        self.canvas_list = []
+        for item in os.listdir(os.getcwd()):
+            if str(item)[-3::] in ['.db']:
+                self.canvas_list.append(str(item)[:-3])
+        self.completer = QCompleter(self.canvas_list)
+
+    #--------------PAINTER FUNCTIONS--------------------------
+
+    def drawLines(self, event, painter):
+        painter.setRenderHint(QPainter.Antialiasing);
+
+        for i in range(self.DrawingShapes.NumberOfShapes() - 1):
+
+            T = self.DrawingShapes.GetShape(i)
+            T1 = self.DrawingShapes.GetShape(i + 1)
+
+            if (T.ShapeNumber == T1.ShapeNumber):
+                pen = QPen(QColor(T.Colour.R, T.Colour.G, T.Colour.B), T.Width / 2, Qt.SolidLine)
+                painter.setPen(pen)
+                painter.drawLine(T.Location.X, T.Location.Y, T1.Location.X, T1.Location.Y)
 
 if __name__ == '__main__':
     counter = 0
